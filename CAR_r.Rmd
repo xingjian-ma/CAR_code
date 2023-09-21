@@ -1,0 +1,409 @@
+---
+title: "CAR"
+output: html_document
+date: "2023-03-07"
+---
+
+```{r}
+library(tidyverse)
+library(dplyr)
+library(ggplot2)
+library(MASS)
+library(entropy)
+library(Rcpp)
+library(RcppArmadillo)
+```
+
+```{r}
+prob <- runif(16)
+prob <- prob/sum(prob)
+prob <- rep(1/16,16)
+
+prob
+
+get_covariate_data <- function(size,prob){
+  raw_data <- data.frame(t(rmultinom(n = size,size=1,prob = prob)))
+  data <- raw_data %>% transmute(X1 = rowSums(.[c(1:8)]),
+                                 X2 = rowSums(.[c(1:4,9:12)]),
+                                 X3 = rowSums(.[c(1:2,5:6,9:10,13:14)]),
+                                 X4 = rowSums(.[c(1,3,5,7,9,11,13,15)])) 
+  return(as.matrix(data))              
+}
+
+get_full_data <- function(size,covariates,groups,ratio){
+  covariate_data <- get_covariate_data(size,prob)
+  treat_data <- rcpp_get_treat_data(size,ratio,groups)
+  colnames(covariate_data) <- NULL
+  return(cbind(covariate_data,treat_data))
+}
+
+new_ratio <- function(imb,allocation){
+  return(allocation[rank(-imb)])
+}
+
+get_full_data(10,4,2,c(0.5,0.5))
+```
+
+```{r}
+CAR <- function(data,groups,ratio,allocation,covarites,observed,size,wo=0.3,wm=rep(0.1,2),ws=0.5){
+  Treat <- matrix(0,nrow = size,ncol = groups)
+  Treat[1,] <- t(rmultinom(n=1,size=1,ratio))
+  Treat <- data.frame(Treat)
+  colnames(Treat) <- rep('T',groups)
+  data <- cbind(data,Treat)
+
+  
+  i <- 2
+  while(i<size+1){
+    
+    Imb <- rep(0,groups)
+    
+    for (j in 1:groups) {
+      
+      data[i,(covarites+1):(covarites+groups)] <- rep(0,groups)
+      data[i,(covarites+j)] <- 1
+      
+      #Overall Imbanlance
+      Imb_all <- wo*sum((colSums(data[1:i,])[(covarites+1):(covarites+groups)]-ratio*i)^2)
+      
+      
+      #Margin Imbanlance
+      Imb_mar_list <- rep(0,observed)
+      for (k in 1:observed) {
+        data_mar <- data[1:i,] %>% 
+          subset(get(paste('X',k,sep=''))==get(paste('X',k,sep=''))[i])
+        num <- nrow(data_mar)
+        Imb_mar_list[k] <- sum((colSums(data_mar)[(covarites+1):(covarites+groups)]-ratio*num)^2)
+      }
+      Imb_mar <- sum(Imb_mar_list*wm)
+      
+      #Stratum Imbanlance
+      data_stra <- data[1:i,][apply((data[(1:i),(1:observed)]==c(t(data[i,1:observed]))),FUN = all,MARGIN = 1),]
+      Imb_stra <- ws*sum((colSums(data_stra)[(covarites+1):(covarites+groups)]-ratio*nrow(data_stra))^2)
+
+      #Sum
+      Imb[j] <- Imb_all + Imb_mar + Imb_stra
+    }
+  
+  
+  new_ratio <- allocation[rank(-Imb)]
+  data[i,(covarites+1):(covarites+groups)] <- t(rmultinom(n=1,size=1,new_ratio))
+  i <- i + 1
+
+    
+    
+  }
+  
+  return(data)
+  
+}
+```
+
+```{r}
+loop <- function(times,size,groups,ratio,covarites,observed,allocation){
+  i <- 0
+  D_overall <- numeric(times)
+  D_margin1 <- numeric(times)
+  D_margin2 <- numeric(times)
+  D_margin3 <- numeric(times)
+  D_margin4 <- numeric(times)
+  D_stratum1 <- numeric(times)
+  D_stratum2 <- numeric(times)
+  D_stratum3 <- numeric(times)
+  D_stratum4 <- numeric(times)
+  while (i < times) {
+    
+    # Sigma <- matrix(c(1,0,0.2,0,1,0.2,0.2,0.2,1),3,3)
+    # t <- data.frame(mvrnorm(n=size,rep(0,3),Sigma))
+    # data <- t %>% mutate(X1 = ifelse(X1>0,1,0),
+    #                      X2 = ifelse(X2>0,1,0),
+    #                      X3 = ifelse(X3>0,1,0))
+    
+    data <- get_data(size = size,prob)
+    
+    
+    #data <- data.frame(cbind(X1 = rbinom(size,1,0.5),X2 = rbinom(size,1,0.5)))
+    result <-  CAR(data = data,groups = groups,ratio = ratio,allocation = allocation, covarites = covarites,observed = observed,size = size)
+    
+    
+    
+    D_overall[i] <- colSums(result)[covarites+1]-ratio[1]*size
+    D_margin1[i] <- colSums(result[result$X3==0,])[covarites+1]-ratio[1]*nrow(result[result$X3==0,])
+    D_margin2[i] <- colSums(result[result$X3==1,])[covarites+1]-ratio[1]*nrow(result[result$X3==1,])
+    D_margin3[i] <- colSums(result[result$X4==0,])[covarites+1]-ratio[1]*nrow(result[result$X4==0,])
+    D_margin4[i] <- colSums(result[result$X4==1,])[covarites+1]-ratio[1]*nrow(result[result$X4==1,])
+    
+    
+    D_stratum1[i] <- colSums(result[result$X3==0&result$X4==0,])[covarites+1]-ratio[1]*nrow(result[result$X3==0&result$X4==0,])
+    D_stratum2[i] <-colSums(result[result$X3==0&result$X4==1,])[covarites+1]-ratio[1]*nrow(result[result$X3==0&result$X4==1,])
+    D_stratum3[i] <- colSums(result[result$X3==1&result$X4==0,])[covarites+1]-ratio[1]*nrow(result[result$X3==1&result$X4==0,])
+    D_stratum4[i] <- colSums(result[result$X3==1&result$X4==1,])[covarites+1]-ratio[1]*nrow(result[result$X3==1&result$X4==1,])
+    i <- i+1  
+    
+  }
+  
+    cat('Dn:',mean(D_overall),var(D_overall),'\n')
+    cat('Dn(3;0):',mean(D_margin1),var(D_margin1),'\n')
+    cat('Dn(3;1):',mean(D_margin2),var(D_margin2),'\n')
+    cat('Dn(4;0):',mean(D_margin3),var(D_margin3),'\n')
+    cat('Dn(4;1):',mean(D_margin4),var(D_margin4),'\n')
+    cat('Dn(0,0):',mean(D_stratum1),var(D_stratum1),'\n')
+    cat('Dn(0,1):',mean(D_stratum2),var(D_stratum2),'\n')
+    cat('Dn(1,0):',mean(D_stratum3),var(D_stratum3),'\n')
+    cat('Dn(1,1):',mean(D_stratum4),var(D_stratum4),'\n')
+  
+}
+
+
+```
+
++---------------------------+------------------------+------------------------+
+| Target：(0.1,0.2,0.3,0.4) | Result                 |                        |
++===========================+========================+========================+
+| (0.05,0.15,0.35,0.45)     | 正常                   | 对称大于目标值         |
+|                           |                        |                        |
+|                           |                        | 控制了四个值           |
++---------------------------+------------------------+------------------------+
+| (0.02,0.03,0.45,0.5)      | 正常                   | 中间值也大于边界目标值 |
+|                           |                        |                        |
+|                           |                        | 控制了四个值？         |
++---------------------------+------------------------+------------------------+
+| (0.05,0.15,0.25,0.55)     | 正常                   | 一个中间值小于目标值   |
+|                           |                        |                        |
+|                           |                        | 控制了三个值           |
++---------------------------+------------------------+------------------------+
+| (0.05,0.21,0.31,0.43)     | 正常                   | 上一行的对称情况       |
+|                           |                        |                        |
+|                           |                        | 控制了三个值           |
++---------------------------+------------------------+------------------------+
+| (0.15,0.15,0.35,0.35)     | 中间比例正常，两端不够 | 两端均不够             |
+|                           |                        |                        |
+|                           | 170 206 304 320        | 控制了两个值           |
++---------------------------+------------------------+------------------------+
+| (0.08,0.18,0.36,0.38)     | 116 217 315 352        | 最右侧不够             |
+|                           |                        |                        |
+|                           |                        | 控制了三个值           |
++---------------------------+------------------------+------------------------+
+| (0.05,0.3,0.2,0.45)       | 124 224 278 374        | 中间值相反             |
+|                           |                        |                        |
+|                           | 有一定影响             | 控制了两个值           |
++---------------------------+------------------------+------------------------+
+| (0.05,0.25,0.25,0.45)     | 正常但有一点影响       | 中间值均不够           |
+|                           |                        |                        |
+|                           | 107 206 296 391        | 控制了两个值           |
++---------------------------+------------------------+------------------------+
+
+4 groups: 控制两个端点和中间任意一个点就行
+
++----------------------+----------------+--------------+
+| Target:(0.2,0.3,0.5) | Result         | Col3         |
++======================+================+==============+
+| (0.1,0.3,0.6)        | 完美结果       | 控制三个值？ |
+|                      |                |              |
+|                      | 200 300 500    |              |
++----------------------+----------------+--------------+
+| (0.1,0.25,0.65)      | 完美结果       | 控制两个值   |
+|                      |                |              |
+|                      | 200 299 501    |              |
++----------------------+----------------+--------------+
+| (0.1,0.35,0.55)      | 完美结果       | 上一行的对称 |
+|                      |                |              |
+|                      | 201 300 499    |              |
++----------------------+----------------+--------------+
+| (0.25,0.3,0.45)      | 近似按分配比例 | 两端点不够   |
+|                      |                |              |
+|                      | 268 274 458    |              |
++----------------------+----------------+--------------+
+| (0.15,0.4,0.45)      | 219 317 464    | 右端点不够   |
++----------------------+----------------+--------------+
+
+3 groups: 控制左右两个端点就行
+
+| n   | Mean(Dn) | Var(Dn)             | Col3 |
+|-----|----------|---------------------|------|
+| 50  | 0.035    | 2.937 *3.973*       |      |
+| 100 | 0.032    | 3.479 3.459 *4.273* |      |
+| 150 | -0.030   | 3.815 *4.760*       |      |
+| 200 | -0.010   | 3.951 *4.962*       |      |
+| 250 | 0.010    | 4.168 *4.861*       |      |
+
+| n   | Mean(Dn(1;1)) | Var(Dn(1;1))         |
+|-----|---------------|----------------------|
+| 50  | 0.031         | 2.796 *4.538*        |
+| 100 | 0.029         | 3.948 4.039 *6.204*  |
+| 150 | -0.015        | 4.770 *7.127*        |
+| 200 | -0.007        | 5.413，5.250 *7.882* |
+| 250 | 0.002         | 5.770 *9.220*        |
+
+```{r}
+data = data.frame(rcpp_get_covariate_data(100,prob))
+data
+data %>% group_by(X1,X2) %>% count()
+data %>% group_by(X1,X2) %>% summarise(p=n()/1000000,p31=sum(X3)/n(),p30=(n()-sum(X3))/n(),var=p*p31*p30) %>% colSums()
+
+mi.empirical(mat[,3:4])
+mat
+
+colSums(data)
+
+entropy.empirical(c(4979,5021))- mi.empirical(mat[,3:4])
+
+
+data %>% mutate(X34=(1-X3)*(1-X4)) %>% group_by(X1,X2) %>% summarise(p=n()/100000,p1=sum(X34)/n(),var=p*p1*(1-p1)) %>% colSums()
+
+```
+
+```{r}
+sourceCpp('sum.cpp')
+sourceCpp('test.cpp')
+
+system.time(rcpp_car(1000,4,2,2,prob,c(0.5,0.5),c(0.4,0.6),wo = 0.3,wm = c(0.1,0.1),ws = 0.5))
+#0.01秒
+system.time(rcpp_loop(1000,500,4,2,2,1,prob,c(0.5,0.5),c(0.3,0.7),wo = 0.3,wm = c(0.1,0.1),ws = 0.5))
+#28秒 
+
+
+rcpp_subset(rcpp_get_data(281,c(0.5,0.5),2,0,real_data[,2:7]),0,135)
+
+
+
+rcpp_car(281,6,4,2,0,c(0.5,0.5),c(0.3,0.7),wo = 0.3,wm = rep(0.05,4),ws = 0.5,real_data[,2:7])
+
+entropy.empirical(real_data[,2:7])
+
+
+```
+
+```{r}
+var <- matrix(0,6,2)
+en_mar <- rep(0,6)
+en_str <- rep(0,6)
+for (i in 1:6){
+  change <- seq(0,3/16,3/80)
+  prob <- matrix(1/16,4,4) + diag(change[i]*(4/3),4,4) - matrix(change[i]/3,4,4)
+  en_mar[i] <- con_entropy_mar(prob)
+  en_str[i] <- con_entropy_str(prob)
+  
+  # for (j in 1:3){
+  res <- rcpp_loop(5000,200,4,2,3,1,prob,c(1/3,1/3,1/3),c(0.1,0.2,0.7),wo = 0.3,wm = c(0.1,0.1),ws = 0.5)
+  var[i,1] = res[1,1]
+  var[i,2] = res[1,2]
+  #   for (k in 1:2){
+  #     var[i,2*(j-1)+k] = res[1,k]
+  #   }
+  # }
+}
+
+
+
+color = c('sum of variance'='red','conditional entropy'='blue')
+
+
+ggplot()+
+  scale_color_manual(values = color)+
+  geom_line(aes(x=seq(0,3/16,3/80),y=en_str*2/9,color = names(color)[2]))+
+  geom_point(aes(x=seq(0,3/16,3/80),y=en_str*2/9,color = names(color)[2]))+
+  geom_line(aes(x=seq(0,3/16,3/80),y=var[,1],color = names(color)[1]))+
+  geom_point(aes(x=seq(0,3/16,3/80),y=var[,1],color = names(color)[1]))+
+  labs(x=expression(symbol(D)),y=NULL,color=NULL)+
+  scale_x_continuous(breaks = seq(0,3/16,3/80))+
+  theme_bw()+
+  theme(legend.position = c(0.85,0.85),
+        panel.grid=element_blank())
+
+ggsave('str.pdf',ggplot()+
+  scale_color_manual(values = color)+
+  geom_line(aes(x=seq(0,3/16,3/80),y=en_str*2/9,color = names(color)[2]))+
+  geom_point(aes(x=seq(0,3/16,3/80),y=en_str*2/9,color = names(color)[2]))+
+  geom_line(aes(x=seq(0,3/16,3/80),y=var[,1],color = names(color)[1]))+
+  geom_point(aes(x=seq(0,3/16,3/80),y=var[,1],color = names(color)[1]))+
+  labs(x=expression(symbol(D)),y=NULL,color=NULL)+
+  scale_x_continuous(breaks = seq(0,3/16,3/80))+
+  theme_bw()+
+  theme(legend.position = c(0.85,0.85),
+        panel.grid=element_blank()),width = 10, height = 6)
+ggplot()+
+  scale_color_manual(values = color)+
+  geom_line(aes(x=seq(0,3/16,3/80),y=en_mar*2/9,color = names(color)[2]))+
+  geom_point(aes(x=seq(0,3/16,3/80),y=en_mar*2/9,color = names(color)[2]))+
+  geom_line(aes(x=seq(0,3/16,3/80),y=var[,2],color = names(color)[1]))+
+  geom_point(aes(x=seq(0,3/16,3/80),y=var[,2],color = names(color)[1]))+
+  labs(x=expression(symbol(D)),y=NULL,color=NULL)+
+  scale_x_continuous(breaks = seq(0,3/16,3/80))+
+  theme_bw()+
+  theme(legend.position = c(0.85,0.85),
+        panel.grid=element_blank())
+
+con_entropy_str <- function(prob){
+  return(entropy.empirical(rowSums(matrix(prob,4,4)))-mi.empirical(matrix(prob,4,4)))
+  
+}
+
+con_entropy_mar <- function(prob){
+  mar <- cbind(colSums(matrix(prob,4,4)[1:2,]),colSums(matrix(prob,4,4)[3:4,]))
+  return(entropy.empirical(colSums(mar))-mi.empirical(mar))
+  
+}
+
+cbind(colSums(matrix(prob,4,4)[1:2,]),colSums(matrix(prob,4,4)[3:4,]))
+
+entropy.empirical(rep(0.25,4))
+
+con_entropy_mar(prob)
+```
+
+```{r}
+cov_data <- read.csv("D:\\xingj\\Documents\\CAR\\Data\\ascii-crf-data-files_nida-cto-0001\\DEMOG.csv")
+
+real_data <- as.matrix(cov_data %>% 
+  dplyr::select(c('SUBJID','SITEID','GENDER','MAJRRACE','MARITAL','EMPLOY3Y','EDUCYRS')) %>% 
+  na.omit %>% 
+  group_by(SUBJID) %>% 
+  slice_head(n=1) %>% 
+  mutate(MARITAL = case_when(MARITAL>=6~2,MARITAL>=3~1,MARITAL>=0~0),
+         EDUCYRS = case_when(EDUCYRS>=13~2,EDUCYRS==12~1,EDUCYRS>=0~0),
+         EMPLOY3Y = case_when(EMPLOY3Y==1~0,EMPLOY3Y %in% c(2,3,7)~1,EMPLOY3Y %in% c(4,5)~2,EMPLOY3Y %in% c(6,8,9)~3),
+         MAJRRACE = case_when(MAJRRACE>=6~4,MAJRRACE==5~3,MAJRRACE==4~2,MAJRRACE==3~1,MAJRRACE>=0~0)))[,2:7]
+
+ggplot()+
+  geom_histogram(aes(x=cov_data$EDUCYRS))
+
+
+
+data.frame(real_data) %>% group_by(EDUCYRS) %>% count()
+
+
+cal_entropy <- function(data,x1,x2,x3,x4){
+  mi <- mi.empirical(as.matrix(data.frame(data) %>% group_by_(x1,x2,x3,x4) %>% summarise(a=sum(EDUCYRS==0),b=sum(EDUCYRS==1),c=sum(EDUCYRS==2)))[,5:7])
+  
+  x <- entropy.empirical(as.matrix(data.frame(data) %>% group_by_(x1,x2,x3,x4) %>% count())[,5])
+  
+  u <- entropy.empirical(as.matrix(data.frame(data) %>% group_by(EDUCYRS) %>% count())[,2])
+  
+  w <- entropy.empirical(as.matrix(data.frame(data) %>% group_by_all() %>% count())[,7])
+  
+  con_ent <- u-mi
+  upper <- w-x
+  lower <- max(0,u-x)
+  
+  return(list(x=x,con_ent=con_ent,upper=upper,lower=lower))
+}
+
+
+cal_entropy(real_data,'SITEID','GENDER','MARITAL','EMPLOY3Y')
+
+
+
+rcpp_loop(5000,281,6,2,2,1,0,c(0.5,0.5),c(0.3,0.7),wo = 0.3,wm = rep(0.5,2),ws = 0.5,real_data)
+
+new <- data.frame(real_data) %>% mutate(U1 = GENDER+MAJRRACE)
+
+
+entropy.empirical(as.matrix(new %>% group_by(U1) %>% count())[,2])
+
+mi.empirical(as.matrix(new %>% group_by_('GENDER','MAJRRACE') %>% summarise(sum(U1==1),sum(U1==2),sum(U1==3),sum(U1==4),sum(U1==5),sum(U1==6)))[,3:8])
+```
+
+H(u)=0.7436098
+
+H(w)=4.4075
