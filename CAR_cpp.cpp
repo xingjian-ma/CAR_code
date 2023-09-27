@@ -57,6 +57,8 @@ rowvec rcpp_new_ratio(rowvec imb, rowvec allocation){
 }
 
 // [[Rcpp::export]]
+//col:第几列，从0开始
+//x:取值
 mat rcpp_subset(mat m, int col, int x){
   vec column = m.col(col);
   uvec v = find(column == x);
@@ -103,8 +105,8 @@ mat rcpp_get_covariate_data(int size, rowvec prob){
 // [[Rcpp::export]]
 mat rcpp_get_data(int size,rowvec ratio,int groups,rowvec prob,mat real_data){
   
-  //mat covariate_data = rcpp_get_covariate_data(size,prob);
-  mat covariate_data = real_data;
+  mat covariate_data = rcpp_get_covariate_data(size,prob);
+  //mat covariate_data = real_data;
   mat treat_data(size,groups);
   treat_data.row(0) = rcpp_multinom(1,ratio);
   mat data = join_rows(covariate_data,treat_data);
@@ -194,6 +196,7 @@ mat rcpp_loop(int n,int size,int covariates,int observed,int groups,int group,
   rowvec list5(n);
   rowvec list6(n);
   rowvec list7(n);
+  rowvec list8(n);
   
 
   for(int i = 0; i < n; i++){
@@ -202,14 +205,16 @@ mat rcpp_loop(int n,int size,int covariates,int observed,int groups,int group,
     // list2[i] = rcpp_get_imb(rcpp_subset_all(data,{0,1},{2,3}),covariates,group,ratio)/sqrt(size);
     // list3[i] = rcpp_get_imb(rcpp_subset_all(data,{1,0},{2,3}),covariates,group,ratio)/sqrt(size);
     // list4[i] = rcpp_get_imb(rcpp_subset_all(data,{1,1},{2,3}),covariates,group,ratio)/sqrt(size);
-    list5[i] = rcpp_get_imb(rcpp_subset(data,5,0),covariates,group,ratio)/sqrt(size);
-    list6[i] = rcpp_get_imb(rcpp_subset(data,5,1),covariates,group,ratio)/sqrt(size);
-    list7[i] = rcpp_get_imb(rcpp_subset(data,5,2),covariates,group,ratio)/sqrt(size);
+    //list5[i] = rcpp_get_imb(rcpp_subset(data,5,0),covariates,group,ratio)/sqrt(size);
+    //list6[i] = rcpp_get_imb(rcpp_subset(data,5,1),covariates,group,ratio)/sqrt(size);
+    //list7[i] = rcpp_get_imb(rcpp_subset(data,5,2),covariates,group,ratio)/sqrt(size);
+    list8[i] = rcpp_get_imb(rcpp_subset_all(data,{0,0},{0,1}),covariates,group,ratio)/sqrt(size);
   }
   
   
   //res(0,0) = var(list1,0)+var(list2,0)+var(list3,0)+var(list4,0);
-  res(0,1) = var(list5,0)+var(list6,0)+var(list7,0);
+  //res(0,1) = var(list5,0)+var(list6,0)+var(list7,0);
+  res(0,0) = var(list8,0);
   return res;
 }
 
