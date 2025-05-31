@@ -1,0 +1,319 @@
+---
+title: "P1"
+output: html_document
+date: "2024-06-11"
+---
+
+```{r}
+library(tidyverse)
+library(dplyr)
+library(ggplot2)
+library(MASS)
+library(entropy)
+library(Rcpp)
+library(RcppArmadillo)
+library(ggpubr)
+library(gridExtra)
+library(cowplot)
+options(dplyr.summarise.inform = FALSE)
+
+sourceCpp('CAR_cpp.cpp')
+sourceCpp('test1.cpp')
+test()
+```
+
+```{r}
+test <- rep(0,10)
+for (i in 1:10) {
+  n <- seq(20,200,20)[i]
+  test[i] <- rcpp_loop(1000,n,12,2,3,1,rep(1,10),c(0.2,0.3,0.5),c(0.05,0.3,0.65),wo = 0.2,wm = rep(0.5/2,2),ws = 0.3,matrix(0))[3,2]*sqrt(n)
+}
+
+
+ggplot(data.frame(test))+
+  geom_line(aes(x = seq(20,200,20), y =test))
+
+
+  
+
+
+
+cube <- array(data = c(2,1,3,2,2,1,3,1,5,7,9,17),   dim = c(2,2,3)    )
+
+test(cube)
+
+rcpp_all_loop(100,10,12,2,3,1,rep(1,10),c(0.2,0.3,0.5),c(0.05,0.3,0.65),wo = 0.2,wm = rep(0.5/2,2),ws = 0.3,rep(0.5,2),matrix(0),list(c(0,1),c(0,1,2)),list(c(0,0),c(0,1,0)))
+```
+
+```{r}
+test3 <- rep(0,10)
+for (i in 1:10) {
+  n <- seq(200,560,40)[i]
+  test3[i] <- rcpp_loop(1000,n,12,4,3,1,rep(1,10),c(0.2,0.3,0.5),c(0.05,0.3,0.65),wo = 0.2,wm = rep(0.5/4,4),ws = 0.3,matrix(0))[3,2]*sqrt(n)
+}
+```
+
+## 每个stratum的期望样本量在25-30以上 分布才能稳定，只能研究最小的stratum，更大的stratum规律未知，但会堆积不确定性
+
+```{r}
+data <- matrix(0,5,6)
+
+for (i in 1:5) {
+  n <- seq(200,1000,200)[i]
+  data[i,1:3] <- rcpp_loop(1000,n,4,2,3,1,prob,c(0.2,0.3,0.5),c(0.05,0.3,0.65),wo = 0.2,wm = c(0.25,0.25),ws = 0.3,real_data)[,2]*sqrt(n)
+  data[i,4:6] <- rcpp_loop(1000,n,4,2,3,1,prob,c(0.2,0.3,0.5),c(0.05,0.3,0.65),wo = 0,wm = c(0.5,0.5),ws = 0,real_data)[,2]*sqrt(n)
+}
+
+
+write.csv(data,'P1.csv',row.names = F)
+
+data <- read.csv("P1.csv")
+```
+
+```{r}
+color = c('M-CAR-ue'="#00abf0",'M-PS-ue'="#eeb401")
+shape = c('M-CAR-ue'=1,'M-PS-ue'=2)
+
+p1 <- ggplot()+
+  geom_line(aes(
+    x = seq(200,1000,200),
+    y = data[,1],
+    color = names(color)[1],
+  ),linetype = 'dashed') +
+  geom_point(aes(
+    x = seq(200,1000,200),
+    y = data[,1],
+    color = names(color)[1],shape = names(shape)[1]
+  ),size = 4) +
+  
+  geom_line(aes(
+    x = seq(200,1000,200),
+    y = data[,4],
+    color = names(color)[2]
+  ),linetype = 'dashed') +
+  geom_point(aes(
+    x = seq(200,1000,200),
+    y = data[,4],
+    color = names(color)[2],shape = names(shape)[2]
+),size =2)+
+labs(x =  'n',
+y = 'Standard Deviation' ,
+title = 'Overall',
+color = NULL,shape=NULL) +
+  scale_x_continuous(breaks = seq(200,1000,200)) +
+  scale_y_continuous(breaks = seq(0,4,0.5),limits=c(0,4)) +
+  theme_bw() +
+  theme(plot.title = element_text(hjust = 0.5),
+        axis.title.y = element_text(size = 8),
+        panel.grid = element_blank(),
+        plot.margin=unit(c(0, 0, 0, 0),'cm'))
+```
+
+```{r}
+p2 <- ggplot()+
+  geom_line(aes(
+    x = seq(200,1000,200),
+    y = data[,2],
+    color = names(color)[1],
+  ),linetype = 'dashed') +
+  geom_point(aes(
+    x = seq(200,1000,200),
+    y = data[,2],
+    color = names(color)[1],shape = names(shape)[1]
+  ),size = 4) +
+  
+  geom_line(aes(
+    x = seq(200,1000,200),
+    y = data[,5],
+    color = names(color)[2]
+  ),linetype = 'dashed') +
+  geom_point(aes(
+    x = seq(200,1000,200),
+    y = data[,5],
+    color = names(color)[2],shape = names(shape)[2]
+),size =2)+
+labs(x =  'n',
+y = 'Standard Deviation' ,
+title = 'Margin',
+color = NULL,shape=NULL) +
+  scale_x_continuous(breaks = seq(200,1000,200)) +
+  scale_y_continuous(breaks = seq(0,4,0.5),limits=c(0,4)) +
+  theme_bw() +
+  theme(plot.title = element_text(hjust = 0.5),
+        axis.title.y = element_text(size = 8),
+        panel.grid = element_blank(),
+        plot.margin=unit(c(0, 0, 0, 0),'cm'))
+```
+
+```{r}
+p3 <- ggplot()+
+  geom_line(aes(
+    x = seq(200,1000,200),
+    y = data[,3],
+    color = names(color)[1],
+  ),linetype = 'dashed') +
+  geom_point(aes(
+    x = seq(200,1000,200),
+    y = data[,3],
+    color = names(color)[1],shape = names(shape)[1]
+  ),size = 4) +
+  
+  geom_line(aes(
+    x = seq(200,1000,200),
+    y = data[,6],
+    color = names(color)[2]
+  ),linetype = 'dashed') +
+  geom_point(aes(
+    x = seq(200,1000,200),
+    y = data[,6],
+    color = names(color)[2],shape = names(shape)[2]
+),size =2)+
+labs(x =  'n',
+y = 'Standard Deviation' ,
+title = 'Stratum',
+color = NULL,shape=NULL) +
+  scale_x_continuous(breaks = seq(200,1000,200)) +
+  scale_y_continuous(breaks = seq(0,4,0.5),limits=c(0,4)) +
+  theme_bw() +
+  theme(plot.title = element_text(hjust = 0.5),
+        axis.title.y = element_text(size = 8),
+        panel.grid = element_blank(),
+        plot.margin=unit(c(0, 0, 0, 0),'cm'))
+```
+
+```{r}
+ggsave('~/CAR/figure/P1.pdf',ggarrange(p1,p2,p3,common.legend = TRUE, legend = 'bottom',ncol = 3),height = 5, width = 15)
+
+```
+
+```{r}
+data = array(0, dim = c(4,5,3,3))
+
+
+save(data, file = 'P1_new.Rdata')
+
+data[1,1,,1] <- c(1,2,3)
+beta <- c(1,1,1,1,1,1,1,1,1,1,6,3)
+
+for (j in 1:3) {
+  used <- c(2,6,10)[j]
+  for (i in 1:5) {
+  n <- seq(200,1000,200)[i]
+  data[1,i,,j] <- rcpp_cr_loop(1000,n,12, used,3,1,beta,c(0.2,0.3,0.5),c(0.05,0.3,0.65),wo = 0.2,wm = c(0.25,0.25),ws = 0.3,real_data)[,2]*sqrt(n)
+  data[2,i,,j] <- rcpp_str_loop(1000,n,12, used,3,1,beta,c(0.2,0.3,0.5),c(0.05,0.3,0.65),wo = 0.2,wm = c(0.25,0.25),ws = 0.3,real_data)[,2]*sqrt(n)
+  data[3,i,,j] <- rcpp_loop(1000,n,12, used,3,1,beta,c(0.2,0.3,0.5),c(0.05,0.3,0.65),wo = 0,wm = array(1/used,used),ws = 0,real_data)[,2]*sqrt(n)
+  data[4,i,,j] <- rcpp_loop(1000,n,12, used,3,1,beta,c(0.2,0.3,0.5),c(0.05,0.3,0.65),wo = 0.2,wm = array(0.5/used,used),ws = 0.3,real_data)[,2]*sqrt(n)
+}
+}
+
+
+load('P1_new.Rdata')
+
+
+
+data_10 <- array(0,dim = c(3,10))
+for (i in 1:10) {
+  
+  n <- seq(1000,10000,1000)[i]
+  data_10[,i] <- rcpp_loop(500,n,12,10,2,1,beta,c(0.5,0.5),c(0.3,0.7),wo = 0.2,wm = array(0.5/10,10),ws = 0.3,real_data)[,2]*sqrt(n)
+}
+```
+
+```{r}
+color = c('CR'="#982b2b",'STR'="#0074b3",'M-PS-ue'="#f47720",'M-CAR-ue'="#459943",)
+shape = c('CR'=1,'STR'=2,'M-CAR-ue'=3,'M-PS-ue'=4)
+
+
+
+plot <- function(level,case){
+  color = c('CR'="#982b2b",'STR'="#0074b3",'M-PS-ue'="#f47720",'M-CAR-ue'="#459943")
+  shape = c('CR'=1,'STR'=2,'M-PS-ue'=3,'M-CAR-ue'=4)
+  
+  
+  pic <- 
+  ggplot()+
+  scale_color_manual(values = color,breaks = names(color)) +
+  scale_shape_manual(values = shape,breaks = names(shape)) +
+  geom_line(aes(
+    x = seq(200,1000,200),
+    y = data[1,,level,case],
+    color = names(color)[1],
+  ),linetype = 1,linewidth = 1) +
+  geom_point(aes(
+    x = seq(200,1000,200),
+    y = data[1,,level,case],
+    color = names(color)[1],shape = names(shape)[1]
+  ),size = 4) +
+  
+  geom_line(aes(
+    x = seq(200,1000,200),
+    y = data[2,,level,case],
+    color = names(color)[2]
+  ),linetype = 1,linewidth = 1) +
+  geom_point(aes(
+    x = seq(200,1000,200),
+    y = data[2,,level,case],
+    color = names(color)[2],shape = names(shape)[2]
+),size =2)+
+  
+    geom_line(aes(
+    x = seq(200,1000,200),
+    y = data[3,,level,case],
+    color = names(color)[3]
+  ),linetype = 1,linewidth = 1) +
+  geom_point(aes(
+    x = seq(200,1000,200),
+    y = data[3,,level,case],
+    color = names(color)[3],shape = names(shape)[3]
+),size =2)+
+  
+    geom_line(aes(
+    x = seq(200,1000,200),
+    y = data[4,,level,case],
+    color = names(color)[4]
+  ),linetype = 1,linewidth = 1) +
+  geom_point(aes(
+    x = seq(200,1000,200),
+    y = data[4,,level,case],
+    color = names(color)[4],shape = names(shape)[4]
+),size =2)+
+labs(x =  NULL ,y=NULL,
+color = NULL,shape=NULL) +
+  scale_x_continuous(breaks = seq(200,1000,200)) +
+  scale_y_continuous(breaks = seq(0,15,1),limits=c(0,15)) +
+  theme_bw() +
+  theme(plot.title = element_text(hjust = 0.5, size = 30),
+        axis.text = element_blank(),
+        axis.title.y = element_text(size = 30),
+        axis.title.x = element_text(size = 30),
+        plot.margin=unit(c(0, 0, 0, 0),'cm'),
+        aspect.ratio=1/1,
+        legend.text = element_text(size = 25),
+        legend.key.size = unit(40,'pt'))
+  
+  if (case == 1) {
+    pic <- pic + labs(y = c('SD of Overall Imbalance','SD of Marginal Imbalance','SD of Within Stratum Imbalance' )[level]) + 
+        theme(axis.text.y = element_text(size = 25))
+  }
+  
+  if(level == 1){
+    pic <- pic + labs(title = c('M1',"M2",'M3')[case] )
+  }
+  
+  if(level == 3){
+    pic <- pic + labs(x = 'n') + theme(axis.text.x = element_text(size = 25))
+  }
+  
+  return(pic)
+}
+
+
+ggsave('~/CAR/figure/test_obs.pdf',test,height = 20, width = 20)
+
+
+test <- ggarrange(plot(1,1),plot(1,2),plot(1,3),plot(2,1),plot(2,2),plot(2,3),plot(3,1),plot(3,2),plot(3,3),common.legend = TRUE, legend = 'bottom',ncol = 3,nrow = 3,align = 'hv')
+
+
+
+
+```

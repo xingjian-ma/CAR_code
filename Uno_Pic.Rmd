@@ -1,0 +1,230 @@
+---
+title: "Uno_pic"
+output: html_document
+date: "2024-07-12"
+---
+
+```{r}
+library(tidyverse)
+library(dplyr)
+library(ggplot2)
+library(MASS)
+library(entropy)
+library(Rcpp)
+library(RcppArmadillo)
+library(ggpubr)
+library(gridExtra)
+
+library(cowplot)
+options(dplyr.summarise.inform = FALSE)
+
+sourceCpp('CAR_cpp.cpp')
+
+sourceCpp('test1.cpp')
+```
+
+```{r}
+uno_data <- array(0, dim = c(4,5,2,3,3,2))
+
+for (i in 1:5) {
+  b <- seq(0.5,2.5,0.5)[i]
+  
+  
+  for (j in 1:2) {
+  n <- c(200,500)[j]
+
+  
+  for (k in 1:3) {
+  used <- c(2,6,10)[k]
+  
+
+  for (l in 1:3) {
+    sel <- list(c(rep(0,10),1,-1),
+     c(1,rep(0,10),-1),
+     c(1,-1,rep(0,10)))[[l]]
+    
+    beta <- c(c(rep(c(1,-1),5),0,0),sel)*b
+    
+    uno_data[,i,j,k,l,] <- rcpp_all_loop(5000,n,14,used,3,1,beta,c(0.2,0.3,0.5),c(0.05,0.3,0.65),wo = 0.2,wm = array(0.5/used,used),ws = 0.3,wm_ps = array(1/used,used),real_data)
+    
+    print(uno_data[,i,j,k,l,])
+      
+  # uno_data[1,i,j,k,l,] <- rcpp_cr_loop(1500,n,12, used,3,1,beta,c(0.2,0.3,0.5),c(0.05,0.3,0.65),wo = 0.2,wm = c(0.25,0.25),ws = 0.3,real_data)[,2]
+  # uno_data[2,i,j,k,l,] <- rcpp_str_loop(1500,n,12, used,3,1,beta,c(0.2,0.3,0.5),c(0.05,0.3,0.65),wo = 0.2,wm = c(0.25,0.25),ws = 0.3,real_data)[,2]
+  # uno_data[3,i,j,k,l,] <- rcpp_loop(1500,n,12, used,3,1,beta,c(0.2,0.3,0.5),c(0.05,0.3,0.65),wo = 0,wm = array(1/used,used),ws = 0,real_data)[,2]
+  # uno_data[4,i,j,k,l,] <- rcpp_loop(2000,n,12, used,3,1,beta,c(0.2,0.3,0.5),c(0.05,0.3,0.65),wo = 0.2,wm = array(0.5/used,used),ws = 0.3,real_data)[,2]
+   print(c(i,j,k,l))
+    }
+  }
+}
+}
+
+
+
+data.frame(rcpp_get_covariate_data(1000000,14,6,1*c(c(rep(c(1,-1),5),0,0),list(c(rep(0,10),1,-1),
+     c(1,rep(0,10),-1),
+     c(1,-1,rep(0,10)))[[3]]))) %>%
+  group_by(X1,X2,X3,X4,X5,X6) %>% 
+  summarise(con_p = sum(X13==0&X14==0)/n(),p=n()/1000000 ) %>% 
+  mutate(res = p*con_p*(1-con_p)) %>% 
+  colSums()
+
+
+
+sel <- list(c(rep(0,10),1,-1),
+ c(1,rep(0,10),-1),
+ c(1,-1,rep(0,10)))[[2]]
+
+beta <- c(c(rep(c(1,-1),5),0,0),sel)*1
+
+rcpp_all_loop(2000,500,14,10,3,1,beta,c(0.2,0.3,0.5),c(0.05,0.3,0.65),wo = 0.2,wm = array(0.5/10,10),ws = 0.3,wm_ps = array(1/10,10),real_data)
+
+uno_data
+```
+
+```{r}
+plot <- function(case, setting, level){
+  color = c('CR n = 200' = "#982b2b",'CR n = 500'= "#982b2b", 'STR n = 200'="#0074b3",'STR n = 500'="#0074b3",'M-PS-ue n = 200'="#f47720",'M-PS-ue n = 500'="#f47720",'M-CAR-ue n = 200'="#459943",'M-CAR-ue n = 500'="#459943")
+  shape = c('CR n = 200'= 1,'CR n = 500'= 2, 'STR n = 200'= 3, 'STR n = 500' =4, 'M-PS-ue n = 200'= 5,'M-PS-ue n = 500'= 6,'M-CAR-ue n = 200'= 7,'M-CAR-ue n = 500'= 8)
+  
+  
+  pic <- 
+  ggplot()+
+  scale_color_manual(values = color,breaks = names(color)) +
+  scale_shape_manual(values = shape,breaks = names(shape)) +
+  geom_line(aes(
+    x = seq(1,3,0.5),
+    y = uno_data[1,,1,case,setting,level],
+    color = names(color)[1],
+  ),linetype = 1,linewidth = 1) +
+  geom_point(aes(
+    x = seq(1,3,0.5),
+    y = uno_data[1,,1,case,setting,level],
+    color = names(color)[1],shape = names(shape)[1]
+  ),size = 4) +
+    
+    geom_line(aes(
+    x = seq(1,3,0.5),
+    y = uno_data[1,,2,case,setting,level],
+    color = names(color)[2],
+  ),linetype = 1,linewidth = 1) +
+  geom_point(aes(
+    x = seq(1,3,0.5),
+    y = uno_data[1,,2,case,setting,level],
+    color = names(color)[2],shape = names(shape)[2]
+  ),size = 4) +
+  
+  geom_line(aes(
+    x = seq(1,3,0.5),
+    y = uno_data[2,,1,case,setting,level],
+    color = names(color)[3],
+  ),linetype = 1,linewidth = 1) +
+  geom_point(aes(
+    x = seq(1,3,0.5),
+    y = uno_data[2,,1,case,setting,level],
+    color = names(color)[3],shape = names(shape)[3]
+  ),size = 4) +
+    
+    geom_line(aes(
+    x = seq(1,3,0.5),
+    y = uno_data[2,,2,case,setting,level],
+    color = names(color)[4],
+  ),linetype = 1,linewidth = 1) +
+  geom_point(aes(
+    x = seq(1,3,0.5),
+    y = uno_data[2,,2,case,setting,level],
+    color = names(color)[4],shape = names(shape)[4]
+  ),size = 4) +
+    
+      geom_line(aes(
+    x = seq(1,3,0.5),
+    y = uno_data[3,,1,case,setting,level],
+    color = names(color)[5],
+  ),linetype = 1,linewidth = 1) +
+  geom_point(aes(
+    x = seq(1,3,0.5),
+    y = uno_data[3,,1,case,setting,level],
+    color = names(color)[5],shape = names(shape)[5]
+  ),size = 4) +
+    
+    geom_line(aes(
+    x = seq(1,3,0.5),
+    y = uno_data[3,,2,case,setting,level],
+    color = names(color)[6],
+  ),linetype = 1,linewidth = 1) +
+  geom_point(aes(
+    x = seq(1,3,0.5),
+    y = uno_data[3,,2,case,setting,level],
+    color = names(color)[6],shape = names(shape)[6]
+  ),size = 4) +
+    
+    geom_line(aes(
+    x = seq(1,3,0.5),
+    y = uno_data[4,,1,case,setting,level],
+    color = names(color)[7],
+  ),linetype = 1,linewidth = 1) +
+  geom_point(aes(
+    x = seq(1,3,0.5),
+    y = uno_data[4,,1,case,setting,level],
+    color = names(color)[7],shape = names(shape)[7]
+  ),size = 4) +
+    
+    geom_line(aes(
+    x = seq(1,3,0.5),
+    y = uno_data[4,,2,case,setting,level],
+    color = names(color)[8],
+  ),linetype = 1,linewidth = 1) +
+  geom_point(aes(
+    x = seq(1,3,0.5),
+    y = uno_data[4,,2,case,setting,level],
+    color = names(color)[8],shape = names(shape)[8]
+  ),size = 4) +
+    
+labs(x =  NULL,y=NULL,
+color = NULL,shape=NULL) +
+  scale_x_continuous(breaks = seq(1,3,0.5)) +
+  scale_y_continuous(breaks = seq(0.125,0.225,0.025),
+                     minor_breaks = seq(0.125, 0.225, 0.025/2),
+                     limits=c(0.125,0.225)) +
+  theme_bw() +
+  theme(plot.title = element_text(hjust = 0.5, size = 30),
+        axis.text = element_blank(),
+        axis.title.y = element_text(size = 30),
+        axis.title.x = element_text(size = 30),
+        plot.margin=unit(c(0, 0, 0, 0),'cm'),
+        aspect.ratio=1/1,
+        legend.text = element_text(size = 25),
+        legend.key.size = unit(40,'pt')
+        )
+  
+  if (case == 1) {
+    pic <- pic + labs(y = c('Setting 1','Setting 2','Setting 3' )[setting] ) + theme(axis.text.y = element_text(size = 25))
+  }
+  
+  if(setting == 1){
+    pic <- pic + labs(title = c('M1',"M2",'M3')[case] )
+  }
+  
+  if(setting == 3){
+    pic <- pic + labs(x = 'beta') + theme(axis.text.x = element_text(size = 25))
+  }
+  
+  
+  return(pic)
+}
+
+
+
+
+res <- function(level){
+  pic <- ggarrange(plot(1,1,level),plot(2,1,level),plot(3,1,level),plot(1,2,level),plot(2,2,level),plot(3,2,level),plot(1,3,level),plot(2,3,level),plot(3,3,level),common.legend = TRUE, legend = 'bottom', ncol = 3,nrow = 3, align = 'hv')
+  return(pic)
+}
+
+
+
+ggsave('~/CAR/figure/test_uno6.pdf', res(2), height = 30, width = 30)
+
+
+
+```

@@ -12,46 +12,132 @@ library(MASS)
 library(entropy)
 library(Rcpp)
 library(RcppArmadillo)
+library(ggpubr)
+library(gridExtra)
+
+library(cowplot)
+options(dplyr.summarise.inform = FALSE)
 ```
 
 ```{r}
-prob <- runif(16)
+
+g <- function(d,limit){
+  return(-(1/(1+exp(-2*d))-0.5)*2*limit )
+}
+
+
+all_fun <- function(d,p,limit){
+  if (d > 0) {
+    return(p - 0.2)
+  }
+  if(d < 0){
+    return(p + 0.2)
+  }
+  if (d == 0) {
+    return(p)
+  }
+}
+
+
+
+all_fun1 <- function(d,p,limit){
+  if (d > 0) {
+    return(p + g(d,limit))
+  }
+  if(d < 0){
+    return(p + g(d,limit))
+  }
+  if (d == 0) {
+    return(p)
+  }
+}
+
+
+
+res <- function(n,p){
+  d <- 1
+  value <- rep(0,n)
+  for (i in 1:n){
+    all <- all_fun1(d-0.29,p,0.21)
+    seed <- runif(1)
+    if (seed < all) {
+      d = d + 1 - p
+    }
+    else{
+      d = d - p
+    }
+    d <- round(d,3)
+    value[i] <- d
+  }
+  return(data.frame(value))
+  
+  #return(d)
+}
+
+
+value <- rep(0,1000)
+for (i in 1:5000) {
+  value[i] <- res(500,0.7)
+}
+
+res(500000,0.79) %>% mutate(g = g(value-0.29,0.21)) %>% colMeans()
+
+res(500000,0.78) %>% mutate(x1 = case_when(value-0.28  > 0 ~0.58,
+                                          value-0.28  == 0 ~0.78,
+                                          value-0.28  < 0 ~0.98)) %>% colMeans()
+
+
+ggplot(data = data.frame(value))+
+  geom_histogram(aes(x = value), bins = 40, binwidth = 0.1)
+
+
+
+
+```
+
+```{r}
 prob <- prob/sum(prob)
 prob <- rep(1/16,16)
 
-prob
 
-get_covariate_data <- function(size,prob){
-  raw_data <- data.frame(t(rmultinom(n = size,size=1,prob = prob)))
-  data <- raw_data %>% transmute(X1 = rowSums(.[c(1:8)]),
-                                 X2 = rowSums(.[c(1:4,9:12)]),
-                                 X3 = rowSums(.[c(1:2,5:6,9:10,13:14)]),
-                                 X4 = rowSums(.[c(1,3,5,7,9,11,13,15)])) 
+
+get_continuous_data <- function(size,groups,ratio){
+  covariate_data <- data.frame(rnorm(size,mean = 100,sd = 10))
+  treat <- matrix(0,nrow = size,ncol = groups)
+  treat[1,] <- t(rmultinom(n=1,size=1,ratio))
+  treat <- data.frame(treat)
+  colnames(treat) <- rep('T',groups)
+  colnames(covariate_data) <- c('X')
+  data <- cbind(covariate_data,treat)
   return(as.matrix(data))              
 }
 
-get_full_data <- function(size,covariates,groups,ratio){
-  covariate_data <- get_covariate_data(size,prob)
-  treat_data <- rcpp_get_treat_data(size,ratio,groups)
-  colnames(covariate_data) <- NULL
-  return(cbind(covariate_data,treat_data))
-}
 
 new_ratio <- function(imb,allocation){
   return(allocation[rank(-imb)])
 }
 
-get_full_data(10,4,2,c(0.5,0.5))
+
+
+allo_fun <- function(imb,ratio){
+  groups <- length(ratio)
+  limit <- min(ratio,1-ratio)/(groups-1)
+  for (i in 1:groups) {
+    for (j in (i+1):groups) {
+      ratio[i] = ratio[i] + g(imb[i]-imb[j],limit)
+      ratio[j] = ratio[j] - g(imb[i]-imb[j],limit)
+      print(ratio)
+    }
+  }
+  return(ratio)
+}
 ```
 
 ```{r}
-CAR <- function(data,groups,ratio,allocation,covarites,observed,size,wo=0.3,wm=rep(0.1,2),ws=0.5){
-  Treat <- matrix(0,nrow = size,ncol = groups)
-  Treat[1,] <- t(rmultinom(n=1,size=1,ratio))
-  Treat <- data.frame(Treat)
-  colnames(Treat) <- rep('T',groups)
-  data <- cbind(data,Treat)
+CAR <- function(groups,ratio,allocation,size,covarites){
 
+  data <- get_continuous_data(size,groups,ratio)
+  #print(data)
   
   i <- 2
   while(i<size+1){
@@ -63,40 +149,65 @@ CAR <- function(data,groups,ratio,allocation,covarites,observed,size,wo=0.3,wm=r
       data[i,(covarites+1):(covarites+groups)] <- rep(0,groups)
       data[i,(covarites+j)] <- 1
       
-      #Overall Imbanlance
-      Imb_all <- wo*sum((colSums(data[1:i,])[(covarites+1):(covarites+groups)]-ratio*i)^2)
+      # #Overall Imbanlance
+      # Imb_all <- wo*sum((colSums(data[1:i,])[(covarites+1):(covarites+groups)]-ratio*i)^2)
       
       
-      #Margin Imbanlance
-      Imb_mar_list <- rep(0,observed)
-      for (k in 1:observed) {
-        data_mar <- data[1:i,] %>% 
-          subset(get(paste('X',k,sep=''))==get(paste('X',k,sep=''))[i])
-        num <- nrow(data_mar)
-        Imb_mar_list[k] <- sum((colSums(data_mar)[(covarites+1):(covarites+groups)]-ratio*num)^2)
-      }
-      Imb_mar <- sum(Imb_mar_list*wm)
+      # #Margin Imbanlance
+      # Imb_mar_list <- rep(0,observed)
+      # for (k in 1:observed) {
+      #   data_mar <- data[1:i,] %>% 
+      #     subset(get(paste('X',k,sep=''))==get(paste('X',k,sep=''))[i])
+      #   num <- nrow(data_mar)
+      #   Imb_mar_list[k] <- sum((colSums(data_mar)[(covarites+1):(covarites+groups)]-ratio*num)^2)
+      # }
+      # Imb_mar <- sum(Imb_mar_list*wm)
+      # 
+      # #Stratum Imbanlance
+      # data_stra <- data[1:i,][apply((data[(1:i),(1:observed)]==c(t(data[i,1:observed]))),FUN = all,MARGIN = 1),]
+      # Imb_stra <- ws*sum((colSums(data_stra)[(covarites+1):(covarites+groups)]-ratio*nrow(data_stra))^2)
       
-      #Stratum Imbanlance
-      data_stra <- data[1:i,][apply((data[(1:i),(1:observed)]==c(t(data[i,1:observed]))),FUN = all,MARGIN = 1),]
-      Imb_stra <- ws*sum((colSums(data_stra)[(covarites+1):(covarites+groups)]-ratio*nrow(data_stra))^2)
+      
+      Imb1 <- t(data[1:i,covarites]) %*% data[1:i,(covarites+1):(covarites+groups)]
+      Imb2 <- t(data[1:i,covarites]) %*% t(matrix(rep(ratio,i),groups,i)) 
 
       #Sum
-      Imb[j] <- Imb_all + Imb_mar + Imb_stra
+      #print((Imb1-Imb2))
+      Imb[j] <- sum((Imb1 - Imb2)^2)
     }
   
   
-  new_ratio <- allocation[rank(-Imb)]
+  # new_ratio <- allocation[rank(-Imb)]
+
+  new_ratio <- rcpp_sym_ratio(Imb,ratio)
   data[i,(covarites+1):(covarites+groups)] <- t(rmultinom(n=1,size=1,new_ratio))
   i <- i + 1
 
-    
     
   }
   
   return(data)
   
 }
+
+
+loop <- function(times,groups,ratio,allocation,size,covarites){
+  i <- 1
+  D <- rep(0,times)
+  while (i < times+1){
+  res <- CAR(groups,ratio,allocation,size,covarites)
+  D[i] <- t(res[,1])**1 %*% (res[,2] - ratio[1])
+  i <- i + 1
+  }
+  
+  return(c(mean(D),var(D)))
+}
+
+
+
+
+CAR(3,c(0.6,0.1,0.3),c(0.1,0.8),50,1)
+loop(1000,3,c(0.2,0.3,0.5),c(0.1,0.8),100,1)
 ```
 
 ```{r}
@@ -195,27 +306,27 @@ loop <- function(times,size,groups,ratio,covarites,observed,allocation){
 
 4 groups: 控制两个端点和中间任意一个点就行
 
-+----------------------+----------------+---------------+
-| Target:(0.2,0.3,0.5) | Result         | Col3          |
-+======================+================+===============+
-| (0.1,0.3,0.6)        | 完美结果       | 控制三个值？  |
-|                      |                |               |
-|                      | 200 300 500    |               |
-+----------------------+----------------+---------------+
-| (0.1,0.25,0.65)      | 完美结果       | 控制两个值    |
-|                      |                |               |
-|                      | 200 299 501    |               |
-+----------------------+----------------+---------------+
-| (0.1,0.35,0.55)      | 完美结果       | 上一行的对称  |
-|                      |                |               |
-|                      | 201 300 499    |               |
-+----------------------+----------------+---------------+
-| (0.25,0.3,0.45)      | 近似按分配比例 | 两端点不够    |
-|                      |                |               |
-|                      | 268 274 458    |               |
-+----------------------+----------------+---------------+
-| (0.15,0.4,0.45)      | 219 317 464    | 右端点不够    |
-+----------------------+----------------+---------------+
++----------------------+----------------+--------------+
+| Target:(0.2,0.3,0.5) | Result         | Col3         |
++======================+================+==============+
+| (0.1,0.3,0.6)        | 完美结果       | 控制三个值？ |
+|                      |                |              |
+|                      | 200 300 500    |              |
++----------------------+----------------+--------------+
+| (0.1,0.25,0.65)      | 完美结果       | 控制两个值   |
+|                      |                |              |
+|                      | 200 299 501    |              |
++----------------------+----------------+--------------+
+| (0.1,0.35,0.55)      | 完美结果       | 上一行的对称 |
+|                      |                |              |
+|                      | 201 300 499    |              |
++----------------------+----------------+--------------+
+| (0.25,0.3,0.45)      | 近似按分配比例 | 两端点不够   |
+|                      |                |              |
+|                      | 268 274 458    |              |
++----------------------+----------------+--------------+
+| (0.15,0.4,0.45)      | 219 317 464    | 右端点不够   |
++----------------------+----------------+--------------+
 
 3 groups: 控制左右两个端点就行
 
@@ -242,7 +353,7 @@ data %>% group_by(X1,X2) %>% count()
 data %>% group_by(X1,X2) %>% summarise(p=n()/1000000,p31=sum(X3)/n(),p30=(n()-sum(X3))/n(),var=p*p31*p30) %>% colSums()
 
 mi.empirical(mat[,3:4])
-mat
+
 
 colSums(data)
 
@@ -251,44 +362,76 @@ entropy.empirical(c(4979,5021))- mi.empirical(mat[,3:4])
 
 data %>% mutate(X34=(1-X3)*(1-X4)) %>% group_by(X1,X2) %>% summarise(p=n()/100000,p1=sum(X34)/n(),var=p*p1*(1-p1)) %>% colSums()
 
+
+
+prob[1,1]
 ```
+
+0000 0001 0010 0011
+
+0100 0101
 
 ```{r}
 sourceCpp('CAR_cpp.cpp')
-sourceCpp('test.cpp')
-
-system.time(rcpp_car(1000,4,2,2,prob,c(0.5,0.5),c(0.4,0.6),wo = 0.3,wm = c(0.1,0.1),ws = 0.5))
-#0.01秒
-system.time(rcpp_loop(1000,500,4,2,2,1,prob,c(0.5,0.5),c(0.3,0.7),wo = 0.3,wm = c(0.1,0.1),ws = 0.5))
-#28秒 
 
 
-test <- rcpp_car(1000,4,2,5,prob,rho,c(0.05,0.1,0.15,0.2,0.5),wo = 0.3,wm = c(0.1,0.1),ws = 0.5,real_data)
-rcpp_loop(1000,200,4,2,5,1,prob,rho,c(0.05,0.1,0.15,0.2,0.5),wo = 0.3,wm = c(0.1,0.1),ws = 0.5,real_data)
+rcpp_loop(1000,500,4,2,3,1,prob,c(0.2,0.3,0.5),c(0.02,0.2,0.78),wo = 0.2,wm = c(0.25,0.25),ws = 0.3,real_data)
 
 
-rcpp_car(281,6,4,2,0,c(0.5,0.5),c(0.3,0.7),wo = 0.3,wm = rep(0.05,4),ws = 0.5,real_data[,2:7])
-
-entropy.empirical(real_data[,2:7])
+rcpp_loop(1000,500,4,2,3,2,prob2,c(0.2,0.3,0.5),c(0.02,0.2,0.78),wo = 0.2,wm = c(0.25,0.25),ws = 0.3,real_data)
 
 
-colSums(test)
+rcpp_loop(1000,500,4,2,3,1,prob2,c(0.2,0.3,0.5),c(0.02,0.2,0.78),wo = 0,wm = c(0.5,0.5),ws = 0,real_data)
+
+
+rcpp_loop(1000,500,4,2,3,2,prob2,c(0.2,0.3,0.5),c(0.02,0.2,0.78),wo = 0,wm = c(0.5,0.5),ws = 0,real_data)
+
+
+prob <- matrix(rep(1/16,16),4,4)
+
+
+#计算marigin (1;1)
+((data.frame(prob3) %>% 
+  mutate(con_p = (X3+X4)*4) %>% 
+  mutate(p = con_p*(1-con_p)) %>% 
+  colSums())['p']*0.25*0.16)**0.5
+
+
+
+#计算stratum((0,0);0)
+sqrt((0.25* (prob3[1,1]+prob3[1,2])*4 * (1-(prob3[1,1]+prob3[1,2])*4 ) )*0.16)
+
+
+
+
+rcpp_loop(1000,400,4,2,4,1,prob,c(0.2,0.25,0.25,0.3),c(0.23,0.25,0.25,0.27),wo = 0,wm = c(0.5,0.5),ws = 0,real_data)
 ```
 
 ```{r}
-var <- matrix(0,6,2)
-en_mar <- rep(0,6)
-en_str <- rep(0,6)
-for (i in 1:6){
-  change <- seq(0,3/16,3/80)
+(0.2*0.8*0.25)**0.5
+```
+
+```{r}
+
+
+
+
+
+var_mar <- rep(0,7)
+var_str <- rep(0,7)
+en_mar <- rep(0,7)
+en_str <- rep(0,7)
+
+for (i in 1:7){
+  change <- seq(0,0.18,0.03)
   prob <- matrix(1/16,4,4) + diag(change[i]*(4/3),4,4) - matrix(change[i]/3,4,4)
-  en_mar[i] <- con_entropy_mar(prob)
-  en_str[i] <- con_entropy_str(prob)
+  en_mar[i] <- con_entropy_mar(prob)*0.16
+  en_str[i] <- con_entropy_str(prob)*0.16
   
   # for (j in 1:3){
-  res <- rcpp_loop(5000,200,4,2,3,1,prob,c(1/3,1/3,1/3),c(0.1,0.2,0.7),wo = 0.3,wm = c(0.1,0.1),ws = 0.5)
-  var[i,1] = res[1,1]
-  var[i,2] = res[1,2]
+  #res <- rcpp_loop(5000,200,4,2,3,1,prob,c(1/3,1/3,1/3),c(0.1,0.2,0.7),wo = 0.3,wm = c(0.1,0.1),ws = 0.5)
+  var_mar[i] = sv_mar(prob)
+  var_str[i] = sv_str(prob)
   #   for (k in 1:2){
   #     var[i,2*(j-1)+k] = res[1,k]
   #   }
@@ -297,20 +440,109 @@ for (i in 1:6){
 
 
 
+
+
+
+sv_mar <- function(prob){
+  return((data.frame(prob) %>% 
+  mutate(p0 = (X1+X2)*4,p1 = (X3+X4)*4) %>% 
+  mutate(p = (p0*(1-p0)+p1*(1-p1))/4) %>% 
+  colSums())['p']*0.16)
+}
+
+
+sv_str <- function(prob){
+  return((data.frame(prob) %>% 
+  mutate(p1 = X1*4,p2 = X2*4,p3 = X3*4,p4 = X4*4) %>% 
+  mutate(p = (p1*(1-p1)+p2*(1-p2)+p3*(1-p3)+p4*(1-p4))/4) %>% 
+  colSums())['p']*0.16)
+}
+
+
+
 color = c('sum of variance'='red','conditional entropy'='blue')
+shape = c('sum of variance'= 1,'conditional entropy'= 2)
+
+p1 <- ggplot() +
+  scale_color_manual(values = color) +
+  scale_shape_manual(values = shape)+
+  geom_line(aes(
+    x = seq(0,0.18,0.03),
+    y = en_str,
+    color = names(color)[2],
+  ),linetype = 'dashed') +
+  geom_point(aes(
+    x = seq(0,0.18,0.03),
+    y = en_str,
+    color = names(color)[2],shape = names(shape)[2]
+  ),size = 2) +
+  geom_line(aes(
+    x = seq(0,0.18,0.03),
+    y = var_str,
+    color = names(color)[1]
+  ),linetype = 'dashed') +
+  geom_point(aes(
+    x = seq(0,0.18,0.03),
+    y = var_str,
+    color = names(color)[1],shape = names(shape)[1]
+),size =2) +
+  labs(x = expression(symbol(D)),
+y = 'Variance or Entropy' ,
+title = expression(paste('Strata of ',U[1],' and ',U[2])),
+color = NULL,shape=NULL) +
+  scale_x_continuous(breaks = seq(0,0.18,0.03)) +
+  scale_y_continuous(breaks = seq(0,0.24,0.04),limits=c(0,0.24)) +
+  theme_bw() +
+  theme(plot.title = element_text(hjust = 0.5),
+        panel.grid = element_blank(),
+        axis.title.y = element_text(size = 8),
+        plot.margin=unit(c(0, 0, 0, 0),'cm'))
 
 
-ggplot()+
-  scale_color_manual(values = color)+
-  geom_line(aes(x=seq(0,3/16,3/80),y=en_str*2/9,color = names(color)[2]))+
-  geom_point(aes(x=seq(0,3/16,3/80),y=en_str*2/9,color = names(color)[2]))+
-  geom_line(aes(x=seq(0,3/16,3/80),y=var[,1],color = names(color)[1]))+
-  geom_point(aes(x=seq(0,3/16,3/80),y=var[,1],color = names(color)[1]))+
-  labs(x=expression(symbol(D)),y=NULL,color=NULL)+
-  scale_x_continuous(breaks = seq(0,3/16,3/80))+
-  theme_bw()+
-  theme(legend.position = c(0.85,0.85),
-        panel.grid=element_blank())
+p1
+
+
+
+
+
+p2 <- ggplot() +
+  scale_color_manual(values = color) +
+  scale_shape_manual(values = shape)+
+  geom_line(aes(
+    x = seq(0,0.18,0.03),
+    y = en_mar,
+    color = names(color)[2],
+  ),linetype = 'dashed') +
+  geom_point(aes(
+    x = seq(0,0.18,0.03),
+    y = en_mar,
+    color = names(color)[2],shape = names(shape)[2]
+  ),size = 2) +
+  geom_line(aes(
+    x = seq(0,0.18,0.03),
+    y = var_mar,
+    color = names(color)[1]
+  ),linetype = 'dashed') +
+  geom_point(aes(
+    x = seq(0,0.18,0.03),
+    y = var_mar,
+    color = names(color)[1],shape = names(shape)[1]
+),size =2) +
+  labs(x = expression(symbol(D)),
+y = 'Variance or Entropy' ,
+title = expression(paste('Margins of ',U[1])),
+color = NULL,shape=NULL) +
+  scale_x_continuous(breaks = seq(0,0.18,0.03)) +
+  scale_y_continuous(breaks = seq(0,0.24,0.04),limits=c(0,0.24)) +
+  theme_bw() +
+  theme(plot.title = element_text(hjust = 0.5),
+        panel.grid = element_blank(),
+        axis.title.y = element_text(size = 8),
+        plot.margin=unit(c(0, 0, 0, 0),'cm'))
+
+
+p2
+
 
 ggsave('str.pdf',ggplot()+
   scale_color_manual(values = color)+
@@ -323,10 +555,11 @@ ggsave('str.pdf',ggplot()+
   theme_bw()+
   theme(legend.position = c(0.85,0.85),
         panel.grid=element_blank()),width = 10, height = 6)
+
 ggplot()+
   scale_color_manual(values = color)+
-  geom_line(aes(x=seq(0,3/16,3/80),y=en_mar*2/9,color = names(color)[2]))+
-  geom_point(aes(x=seq(0,3/16,3/80),y=en_mar*2/9,color = names(color)[2]))+
+  geom_line(aes(x=seq(0,3/16,3/80),y=en_mar,color = names(color)[2]))+
+  geom_point(aes(x=seq(0,3/16,3/80),y=en_mar,color = names(color)[2]))+
   geom_line(aes(x=seq(0,3/16,3/80),y=var[,2],color = names(color)[1]))+
   geom_point(aes(x=seq(0,3/16,3/80),y=var[,2],color = names(color)[1]))+
   labs(x=expression(symbol(D)),y=NULL,color=NULL)+
@@ -346,11 +579,13 @@ con_entropy_mar <- function(prob){
   
 }
 
-cbind(colSums(matrix(prob,4,4)[1:2,]),colSums(matrix(prob,4,4)[3:4,]))
+p1
 
-entropy.empirical(rep(0.25,4))
 
-con_entropy_mar(prob)
+
+ggarrange(p1,p2,common.legend = TRUE, legend = 'bottom')
+
+ggsave(filename = 'P1.pdf', path = 'D:\\xingj\\Documents\\CAR\\pic', height = 4, width = 6.5)
 ```
 
 ```{r}
@@ -366,51 +601,642 @@ real_data <- as.matrix(cov_data %>%
          EMPLOY3Y = case_when(EMPLOY3Y==1~0,EMPLOY3Y %in% c(2,3,7)~1,EMPLOY3Y %in% c(4,5)~2,EMPLOY3Y %in% c(6,8,9)~3),
          MAJRRACE = case_when(MAJRRACE>=6~4,MAJRRACE==5~3,MAJRRACE==4~2,MAJRRACE==3~1,MAJRRACE>=0~0)))[,2:7]
 
-ggplot()+
-  geom_histogram(aes(x=cov_data$EDUCYRS))
 
 
+real_data
 
-data.frame(real_data) %>% group_by(EDUCYRS) %>% count()
+data.frame(real_data) %>% group_by(SITEID,GENDER) %>% mutate(x = n()) %>%  count(EMPLOY3Y,EDUCYRS)
 
 
-cal_entropy <- function(data,x1,x2,x3,x4){
-  mi <- mi.empirical(as.matrix(data.frame(data) %>% group_by_(x1,x2,x3,x4) %>% summarise(a=sum(EDUCYRS==0),b=sum(EDUCYRS==1),c=sum(EDUCYRS==2)))[,5:7])
+cal_entropy <- function(data,x1,x2){
+  mi <- mi.empirical(as.matrix(data.frame(data) %>% group_by_(x1,x2) %>% summarise(p00 = sum(EMPLOY3Y == 0&EDUCYRS == 0)/n(),
+            p01 = sum(EMPLOY3Y == 0&EDUCYRS == 1),
+            p02 = sum(EMPLOY3Y == 0&EDUCYRS == 2),
+            p03 = sum(EMPLOY3Y == 0&EDUCYRS == 3),
+            p10 = sum(EMPLOY3Y == 1&EDUCYRS == 0),
+            p11 = sum(EMPLOY3Y == 1&EDUCYRS == 1),
+            p12 = sum(EMPLOY3Y == 1&EDUCYRS == 2),
+            p13 = sum(EMPLOY3Y == 1&EDUCYRS == 3),
+            p20 = sum(EMPLOY3Y == 2&EDUCYRS == 0),
+            p21 = sum(EMPLOY3Y == 2&EDUCYRS == 1),
+            p22 = sum(EMPLOY3Y == 2&EDUCYRS == 2),
+            p23 = sum(EMPLOY3Y == 2&EDUCYRS == 3),))[,3:14])
   
-  x <- entropy.empirical(as.matrix(data.frame(data) %>% group_by_(x1,x2,x3,x4) %>% count())[,5])
+  x <- entropy.empirical(as.matrix(data.frame(data) %>% group_by_(x1,x2) %>% count())[,3])
   
   u <- entropy.empirical(as.matrix(data.frame(data) %>% group_by(EDUCYRS) %>% count())[,2])
   
-  w <- entropy.empirical(as.matrix(data.frame(data) %>% group_by_all() %>% count())[,7])
+  sv <- ((data.frame(real_data) %>% group_by_(x1,x2) %>% 
+  summarise(p00 = sum(EMPLOY3Y == 0&EDUCYRS == 0)/n(),
+            p01 = sum(EMPLOY3Y == 0&EDUCYRS == 1)/n(),
+            p02 = sum(EMPLOY3Y == 0&EDUCYRS == 2)/n(),
+            p03 = sum(EMPLOY3Y == 0&EDUCYRS == 3)/n(),
+            p10 = sum(EMPLOY3Y == 1&EDUCYRS == 0)/n(),
+            p11 = sum(EMPLOY3Y == 1&EDUCYRS == 1)/n(),
+            p12 = sum(EMPLOY3Y == 1&EDUCYRS == 2)/n(),
+            p13 = sum(EMPLOY3Y == 1&EDUCYRS == 3)/n(),
+            p20 = sum(EMPLOY3Y == 2&EDUCYRS == 0)/n(),
+            p21 = sum(EMPLOY3Y == 2&EDUCYRS == 1)/n(),
+            p22 = sum(EMPLOY3Y == 2&EDUCYRS == 2)/n(),
+            p23 = sum(EMPLOY3Y == 2&EDUCYRS == 3)/n(),
+            p = n()/281) %>% 
+  mutate(res = p*(p00*(1-p00)+p01*(1-p01)+p02*(1-p02)+p03*(1-p03)+
+                  p10*(1-p10)+p11*(1-p11)+p12*(1-p12)+p13*(1-p13)+
+                  p20*(1-p20)+p21*(1-p21)+p22*(1-p22)+p23*(1-p23))) %>% 
+  colSums())['res'])[[1]]
   
-  con_ent <- u-mi
-  upper <- w-x
-  lower <- max(0,u-x)
+  con_ent <- u - mi
   
-  return(list(x=x,con_ent=con_ent,upper=upper,lower=lower))
+  return(list(x=x,con_ent=con_ent,sv=sv))
 }
 
 
-cal_entropy(real_data,'SITEID','GENDER','MARITAL','EMPLOY3Y')
+cal_entropy(real_data,'MAJRRACE','MARITAL')
 
 
 
-rcpp_loop(5000,281,6,2,2,1,0,c(0.5,0.5),c(0.3,0.7),wo = 0.3,wm = rep(0.5,2),ws = 0.5,real_data)
-
-new <- data.frame(real_data) %>% mutate(U1 = GENDER+MAJRRACE)
+data <- data.frame(t( matrix(c(1.643,1.044,0.635,1.701,1.041,0.630,2.091,1.045,0.631,1.314,1.041,0.632,1.701,1.037,0.629,1.755,1.022,0.618),3,6 )))
 
 
-entropy.empirical(as.matrix(new %>% group_by(U1) %>% count())[,2])
 
-mi.empirical(as.matrix(new %>% group_by_('GENDER','MAJRRACE') %>% summarise(sum(U1==1),sum(U1==2),sum(U1==3),sum(U1==4),sum(U1==5),sum(U1==6)))[,3:8])
+data
+
+data
+
+
+
+
+
+ggplot(data)+
+  geom_point(aes(x = c(1,2,3,4,5,6) ,y = X1 ) )+
+  geom_point(aes(x = c(1,2,3,4,5,6) ,y = X2 ) )+
+  geom_point(aes(x = c(1,2,3,4,5,6) ,y = X3 ) )
 ```
+
+43 strata 0.003
 
 H(u)=0.7436098
 
 H(w)=4.4075
 
+2 observed 2 unobserved 3 groups
+
 ```{r}
-rho <- c(0.1,0.15,0.2,0.25,0.3)
-sum(rho*c(0.05,0.1,0.15,0.2,0.5))
-sum(rho*rho)
+data <- data.frame(cbind(rbinom(1000,1,0.5),rbinom(1000,1,0.5),rnorm(1000,0,0.5),rnorm(1000,0,0.5),rnorm(1000,0,0.5),rnorm(1000,0,0.5))) %>% mutate(X7 = if_else(X1+X3>1,1,0),
+                         X8 = if_else(X2+X4>1,1,0),
+                         X9 = if_else(X1+X2+X5>2,1,0),
+                         X10 = if_else(X1+X2+X6>1,1,0),
+                         X11 = rnorm(1000,0,0.5),
+                         X12 =if_else(X7+X8+X9+X10+X11>3,1,0)  )%>% dplyr::select(c(X7,X8,X9,X10,X12))
+
+
+(data %>% group_by(X7,X8,X9,X10) %>% summarise(con_p = sum(X12==1)/n(),p=n()/1000 ) %>% mutate(res = p*con_p*(1-con_p)) %>% colSums())['res']
+
+(data %>% group_by(X7,X8) %>% summarise(con_p = sum(X12==1)/n(),p=n()/1000 ) %>% mutate(res = p*con_p*(1-con_p)) %>% colSums())['res']
+
+(data %>% group_by(X9,X10) %>% summarise(con_p = sum(X12==1)/n(),p=n()/1000 ) %>% mutate(res = p*con_p*(1-con_p)) %>% colSums())['res']
+
+
+
+entropy.empirical(as.matrix(data.frame(data) %>% group_by(X7,X8) %>% count())[,3])
+
+
+entropy.empirical(as.matrix(data.frame(data) %>% group_by(X9,X10) %>% count())[,3])
+
+
+
+mi.empirical(as.matrix(data %>% group_by(X7,X8) %>% summarise(a = sum(X12==1),b = sum(X12==0) ))[,3:4 ])
+
+mi.empirical(as.matrix(data %>% group_by(X9,X10) %>% summarise(a = sum(X12==1),b = sum(X12==0) ))[,3:4 ])
+data %>% group_by(X7,X8) %>% summarise(a = sum(X12==1,X10==1),b = sum(X12==0) )
+
+
+test_entropy <- function(n,loop){
+  
+    sum1 <- 0
+    sum2 <- 0
+  
+    for (i in 1:loop) {
+      
+    
+    data <- data.frame(cbind(rbinom(n,1,0.5),
+                             rbinom(n,1,0.5),
+                             rbinom(n,1,0.5),
+                             rbinom(n,1,0.5),
+                             rnorm(n,0,0.5),
+                             rnorm(n,0,0.5),
+                             rnorm(n,0,0.5),
+                             rnorm(n,0,0.5),
+                             rnorm(n,0,0.5),
+                             rnorm(n,0,0.5),
+                             rnorm(n,0,0.5),
+                             rnorm(n,0,0.5))) %>% 
+      mutate(A1 = if_else(X1+X5>1,1,0),
+             A2 = if_else(X2+X6>1,1,0),
+             A3 = if_else(X3+X7>1,1,0),
+             A4 = if_else(X4+X8>1,1,0),
+             A5 = if_else(0.5*X1+X2+X9>2,1,0),
+             A6 = if_else(X1+1.2*X2+X3+X10>2,1,0),
+             A7 = if_else(0.5*X2+X4+X11>2,1,0),
+             A8 = if_else(X1+0.8*X3+X4+X12>2,1,0),
+             X13 = rnorm(n,0,0.5),
+             X14 = rnorm(n,0,0.5),
+             U1 =if_else(A1+A3+A5+A6+X13>2,1,0),
+             U2 =if_else(A5+A6+A7+A8+X14>5,1,0))%>% 
+      dplyr::select(c(A1,A2,A3,A4,A5,A6,A7,A8,U1,U2))
+  
+  
+   mi1 <- mi.empirical(as.matrix(data %>% group_by(A1,A2,A3,A4) %>% dplyr::summarise(a = sum(U1==1,U2==1),
+            b = sum(U1==0,U2==1),
+            c = sum(U1==1,U2==0),
+            d = sum(U1==0,U2==0),))[,5:8])
+   
+   mi2 <- mi.empirical(as.matrix(data %>% group_by(A5,A6,A7,A8) %>% dplyr::summarise(a = sum(U1==1,U2==1),
+            b = sum(U1==0,U2==1),
+            c = sum(U1==1,U2==0),
+            d = sum(U1==0,U2==0),))[,5:8])
+  
+  sum1 <- sum1 + mi1
+  sum2 <- sum2 + mi2
+  
+    }
+  
+  return(c(sum1/loop,sum2/loop))
+}
+
+test_entropy(500,100)
+```
+
+10 observed 2 unobserved 4 groups
+
+10个变量与unobserved建立不同的联系 加正态噪声，通过方差控制相关程度
+
+多变量进行变量选择
+
+```{r}
+get_10_data <- function(n,sigma1,sigma2){
+  data <- data.frame(cbind(rbinom(n,1,0.5),
+                           rbinom(n,1,0.5),
+                           rbinom(n,1,0.5),
+                           rbinom(n,1,0.5),
+                           rbinom(n,1,0.5),
+                           rbinom(n,1,0.5),
+                           rbinom(n,1,0.5),
+                           rbinom(n,1,0.5),
+                           rbinom(n,1,0.5),
+                           rbinom(n,1,0.5),
+                           rnorm(n,0,sigma1^2),
+                           rnorm(n,0,sigma2^2))) %>% 
+  mutate(U1 =if_else(X1+X2+X3+X4+X5+X6+X7+X8+X9+X10+X11>6,1,0),
+         U2 =if_else(X1+X2+X3+X12>2,1,0))%>% 
+  dplyr::select(c(X1,X2,X3,X4,X5,X6,X7,X8,X9,X10,U1,U2))
+  return(data)
+}
+
+
+cal_mar_sd <- function(n,sigma1,sigma2,rho){
+  data <- get_10_data(n,sigma1,sigma2)
+  res <-   ((data %>% 
+    group_by(X1,X2,X3,X4,X5,X6,X7,X8,X9,X10) %>% 
+    summarise(r0 = sum(U1 == 0)/n(),
+              r1 = sum(U1 == 1)/n(),
+              p = n()/n) %>% 
+    mutate(sd0 = p*r0*(1-r0),
+           sd1= p*r1*(1-r1)) %>% 
+    colSums())['sd0'][[1]])*rho*(1-rho)
+  return(res**0.5)
+}
+
+cal_mar_sd(1000000,1,1,0.3)
+
+
+
+nrow(rcpp_subset(as.matrix(get_10_data(10000,1,1)),10,0))
+
+
+get_10_data(100000,1,1) %>% 
+    group_by(X1,X2,X3,X4,X5,X6,X7,X8,X9,X10) %>% 
+    summarise(r0 = sum(U1 == 0)/n(),
+              r1 = sum(U1 == 1)/n(),
+                p = n()/100000) %>% 
+    mutate(sd0 = p*r0*(1-r0),
+           sd1= p*r1*(1-r1))
+
+
+
+
+
+mcar_10_g1 <- matrix(0,7,2)
+mcar_10_g2 <- matrix(0,7,2)
+ps_10_g1 <- matrix(0,7,2)
+ps_10_g2 <- matrix(0,7,2)
+
+for (i in 1:7) {
+  sigma_seq <- seq(1,4,0.5)
+  
+  mcar_res_1 <- rcpp_loop(2000,500,12,10,3,1,prob3,c(0.2,0.3,0.5),c(0.02,0.2,0.78),wo = 0.2,wm = rep(0.05,10),ws = 0.3,as.matrix(get_10_data(500,sigma_seq[i],1)))
+  
+  mcar_10_g1[i,1] = mcar_res_1[1,1]
+  mcar_10_g1[i,2] = mcar_res_1[1,2]
+  
+  mcar_res_2 <- rcpp_loop(2000,500,12,10,3,2,prob3,c(0.2,0.3,0.5),c(0.02,0.2,0.78),wo = 0.2,wm = rep(0.05,10),ws = 0.3,as.matrix(get_10_data(500,sigma_seq[i],1)))
+  
+  mcar_10_g2[i,1] = mcar_res_2[1,1]
+  mcar_10_g2[i,2] = mcar_res_2[1,2]
+  
+  ps_res_1 <- rcpp_loop(2000,500,12,10,3,1,prob3,c(0.2,0.3,0.5),c(0.02,0.2,0.78),wo = 0,wm = rep(0.1,10),ws = 0,as.matrix(get_10_data(500,sigma_seq[i],1)))
+  
+  ps_10_g1[i,1] = ps_res_1[1,1]
+  ps_10_g1[i,2] = ps_res_1[1,2]
+  
+  ps_res_2 <- rcpp_loop(2000,500,12,10,3,2,prob3,c(0.2,0.3,0.5),c(0.02,0.2,0.78),wo = 0,wm = rep(0.1,10),ws = 0,as.matrix(get_10_data(500,sigma_seq[i],1)))
+  
+  ps_10_g2[i,1] = ps_res_2[1,1]
+  ps_10_g2[i,2] = ps_res_2[1,2]
+  
+}
+
+
+ps_10_g1[3,2] <- 0.1921645
+
+
+
+```
+
+```{r}
+#CR AND STR-PB IN 10 COVARIATES
+
+
+cal_cr <- function(sigma,rho){
+  p0 <- (get_10_data(1000000,sigma,1) %>% summarise(r0 = sum(U1==0)))[[1]]/1000000
+  res <- p0*rho*(1-rho)
+  return(res**0.5)
+}
+
+
+cal_cr(3,0.3)
+
+cal_strpb <- function(sigma,rho){
+  tau <- cal_mar_sd(1000000,sigma,1,rho)**2
+  res1 <- (data.frame(get_10_data(1000000,sigma,1)) %>% 
+  group_by(X1,X2,X3,X4,X5,X6,X7,X8,X9,X10) %>% 
+    summarise(r0 = sum(U1 == 0)/n()) %>% 
+  mutate(p2 = r0^2) %>% 
+  colSums())['p2']*(1/2^10)*(1- (499/(10*(2^10)) ) )*rho*(1-rho)
+  res <- tau+res1
+  return(res[[1]]**0.5)
+}
+
+
+cr_10_g1 <- rep(0,7)
+cr_10_g2 <- rep(0,7)
+strpb_10_g1 <- rep(0,7)
+strpb_10_g2 <- rep(0,7)
+
+for (i in 1:7) {
+  sigma_seq <- seq(1,4,0.5)
+  
+  cr_10_g1[i] <- cal_cr(sigma_seq[i],0.2)
+  cr_10_g2[i] <- cal_cr(sigma_seq[i],0.3)
+  strpb_10_g1[i] <- cal_strpb(sigma_seq[i],0.2)
+  strpb_10_g2[i] <- cal_strpb(sigma_seq[i],0.3)
+}
+```
+
+```{r}
+color = c('CR'="#2e409a",'STR-PB'="#00abf0",'PS' = "#eeb401", 'MCAR-uneq' = "#942d8d")
+shape = c('CR'=1,'STR-PB'=2,'PS' = 3, 'MCAR-uneq' = 4)
+
+p1 <- ggplot() +
+  scale_color_manual(values = color,breaks = names(color)) +
+  scale_shape_manual(values = shape,breaks = names(shape))+
+  geom_line(aes(
+    x = seq(1,4,0.5),
+    y = cr_10_g1,
+    color = names(color)[1],
+  ),linetype = 'dashed') +
+  geom_point(aes(
+    x = seq(1,4,0.5),
+    y = cr_10_g1,
+    color = names(color)[1],shape = names(shape)[1]
+  ),size = 2) +
+  
+  geom_line(aes(
+    x = seq(1,4,0.5),
+    y = strpb_10_g1,
+    color = names(color)[2]
+  ),linetype = 'dashed') +
+  geom_point(aes(
+    x = seq(1,4,0.5),
+    y = strpb_10_g1,
+    color = names(color)[2],shape = names(shape)[2]
+),size =2) +
+  
+  geom_line(aes(
+    x = seq(1,4,0.5),
+    y = ps_10_g1[,2],
+    color = names(color)[3],
+  ),linetype = 'dashed') +
+  geom_point(aes(
+    x = seq(1,4,0.5),
+    y = ps_10_g1[,2],
+    color = names(color)[3],shape = names(shape)[3]
+  ),size = 2) +
+  
+    geom_line(aes(
+    x = seq(1,4,0.5),
+    y = mcar_10_g1[,2],
+    color = names(color)[4],
+  ),linetype = 'dashed') +
+  geom_point(aes(
+    x = seq(1,4,0.5),
+    y = mcar_10_g1[,2],
+    color = names(color)[4],shape = names(shape)[4]
+  ),size = 2) +
+  
+  labs(x = expression(symbol(sigma)[1]),
+y = 'Standard Deviation' ,
+title = 'Group 1',
+color = NULL,shape=NULL) +
+  scale_x_continuous(breaks = seq(1,4,0.5)) +
+  scale_y_continuous(breaks = seq(0,0.42,0.07),limits=c(0,0.42)) +
+  theme_bw() +
+  theme(plot.title = element_text(hjust = 0.5),
+        axis.title.y = element_text(size = 8),
+        panel.grid = element_blank(),
+        plot.margin=unit(c(0, 0, 0, 0),'cm'))
+
+p1
+
+p2 <- ggplot() +
+  scale_color_manual(values = color, breaks = names(color)) +
+  scale_shape_manual(values = shape, breaks = names(shape))+
+  geom_line(aes(
+    x = seq(1,4,0.5),
+    y = cr_10_g2,
+    color = names(color)[1],
+  ),linetype = 'dashed') +
+  geom_point(aes(
+    x = seq(1,4,0.5),
+    y = cr_10_g2,
+    color = names(color)[1],shape = names(shape)[1]
+  ),size = 2) +
+  
+  geom_line(aes(
+    x = seq(1,4,0.5),
+    y = strpb_10_g2,
+    color = names(color)[2]
+  ),linetype = 'dashed') +
+  geom_point(aes(
+    x = seq(1,4,0.5),
+    y = strpb_10_g2,
+    color = names(color)[2],shape = names(shape)[2]
+),size =2) +
+  
+  geom_line(aes(
+    x = seq(1,4,0.5),
+    y = ps_10_g2[,2],
+    color = names(color)[3],
+  ),linetype = 'dashed') +
+  geom_point(aes(
+    x = seq(1,4,0.5),
+    y = ps_10_g2[,2],
+    color = names(color)[3],shape = names(shape)[3]
+  ),size = 2) +
+  
+    geom_line(aes(
+    x = seq(1,4,0.5),
+    y = mcar_10_g2[,2],
+    color = names(color)[4],
+  ),linetype = 'dashed') +
+  geom_point(aes(
+    x = seq(1,4,0.5),
+    y = mcar_10_g2[,2],
+    color = names(color)[4],shape = names(shape)[4]
+  ),size = 2) +
+  
+  labs(x = expression(symbol(sigma)[1]),
+y = 'Standard Deviation' ,
+title = 'Group 2',
+color = NULL,shape=NULL) +
+  scale_x_continuous(breaks = seq(1,4,0.5)) +
+  scale_y_continuous(breaks = seq(0,0.42,0.07),limits=c(0,0.42)) +
+  theme_bw() +
+  theme(plot.title = element_text(hjust = 0.5),
+        panel.grid = element_blank(),
+        axis.title.y = element_text(size = 8),
+        plot.margin=unit(c(0, 0, 0, 0),'cm'))
+
+ggarrange(p1,p2,common.legend = TRUE, legend = 'bottom')
+
+ggsave(filename = 'P2.pdf', path = 'D:\\xingj\\Documents\\CAR\\pic', height = 4, width = 6.5)
+```
+
+```{r}
+#DIFFERENT COMBINATIONS
+
+
+
+
+
+
+com1_mar <- rep(0,9)
+com2_mar <- rep(0,9)
+com3_mar <- rep(0,9)
+com4_mar <- rep(0,9)
+com1_str <- rep(0,9)
+com2_str <- rep(0,9)
+com3_str <- rep(0,9)
+com4_str <- rep(0,9)
+
+for (i in 1:9) {
+  sigma_seq <- seq(0.5,2.5,0.25)
+  
+  com1_res <- (data.frame(get_10_data(1000000,1,sigma_seq[i])) %>%
+  group_by(X1,X2,X3) %>% 
+  summarise(mar0 = sum(U2==0)/n(),str00 = sum(U1==0&U2==0)/n(),p=n()/1000000) %>%
+  mutate(p0 = mar0*(1-mar0)*p, p00 = str00*(1-str00)*p) %>% 
+  colSums())[c('p0','p00') ]
+  
+  com2_res <- (data.frame(get_10_data(1000000,1,sigma_seq[i])) %>%
+  group_by(X1,X2,X4) %>% 
+  summarise(mar0 = sum(U2==0)/n(),str00 = sum(U1==0&U2==0)/n(),p=n()/1000000) %>%
+  mutate(p0 = mar0*(1-mar0)*p, p00 = str00*(1-str00)*p) %>% 
+  colSums())[c('p0','p00') ]
+  
+  com3_res <- (data.frame(get_10_data(1000000,1,sigma_seq[i])) %>%
+  group_by(X3,X5,X6) %>% 
+  summarise(mar0 = sum(U2==0)/n(),str00 = sum(U1==0&U2==0)/n(),p=n()/1000000) %>%
+  mutate(p0 = mar0*(1-mar0)*p, p00 = str00*(1-str00)*p) %>% 
+  colSums())[c('p0','p00') ]
+  
+  com4_res <- (data.frame(get_10_data(1000000,1,sigma_seq[i])) %>%
+  group_by(X7,X8,X9) %>% 
+  summarise(mar0 = sum(U2==0)/n(),str00 = sum(U1==0&U2==0)/n(),p=n()/1000000) %>%
+  mutate(p0 = mar0*(1-mar0)*p, p00 = str00*(1-str00)*p) %>% 
+  colSums())[c('p0','p00') ]
+  
+  com1_mar[i] = (com1_res[[1]]*0.16)**0.5
+  com1_str[i] = (com1_res[[2]]*0.16)**0.5
+  
+  com2_mar[i] = (com2_res[[1]]*0.16)**0.5
+  com2_str[i] = (com2_res[[2]]*0.16)**0.5
+  
+  com3_mar[i] = (com3_res[[1]]*0.16)**0.5
+  com3_str[i] = (com3_res[[2]]*0.16)**0.5
+  
+  com4_mar[i] = (com4_res[[1]]*0.16)**0.5
+  com4_str[i] = (com4_res[[2]]*0.16)**0.5
+  
+  
+}
+```
+
+```{r}
+color = c('X1,X2,X3'="#2e409a",'X1,X2,X4' = "#eeb401",'X3,X5,X6'="#00abf0",'X7,X8,X9' = "#942d8d")
+shape = c('X1,X2,X3'=1,'X1,X2,X4'=2,'X3,X5,X6' = 3, 'X7,X8,X9' = 4)
+
+p1 <- ggplot() +
+  scale_color_manual(values = color,breaks = names(color)) +
+  scale_shape_manual(values = shape,breaks = names(shape))+
+  geom_line(aes(
+    x = seq(0.5,2.5,0.25),
+    y = com1_mar,
+    color = names(color)[1],
+  ),linetype = 'dashed') +
+  geom_point(aes(
+    x = seq(0.5,2.5,0.25),
+    y = com1_mar,
+    color = names(color)[1],shape = names(shape)[1]
+  ),size = 2) +
+  
+  geom_line(aes(
+    x = seq(0.5,2.5,0.25),
+    y = com2_mar,
+    color = names(color)[2]
+  ),linetype = 'dashed') +
+  geom_point(aes(
+    x = seq(0.5,2.5,0.25),
+    y = com2_mar,
+    color = names(color)[2],shape = names(shape)[2]
+),size =2) +
+  
+  geom_line(aes(
+    x = seq(0.5,2.5,0.25),
+    y = com3_mar,
+    color = names(color)[3],
+  ),linetype = 'dashed') +
+  geom_point(aes(
+    x = seq(0.5,2.5,0.25),
+    y = com3_mar,
+    color = names(color)[3],shape = names(shape)[3]
+  ),size = 2) +
+  
+    geom_line(aes(
+    x = seq(0.5,2.5,0.25),
+    y = com4_mar,
+    color = names(color)[4],
+  ),linetype = 'dashed') +
+  geom_point(aes(
+    x = seq(0.5,2.5,0.25),
+    y = com4_mar,
+    color = names(color)[4],shape = names(shape)[4]
+  ),size = 2) +
+  
+  labs(x = expression(symbol(sigma)[2]),
+y = 'Standard Deviation' ,
+title = expression(paste(r[2],' = 0' )),
+color = NULL,shape=NULL) +
+  scale_x_continuous(breaks = seq(0.5,2.5,0.25)) +
+  scale_y_continuous(breaks = seq(0.1,0.25,0.05),limits=c(0.1,0.25)) +
+  theme_bw() +
+  theme(plot.title = element_text(hjust = 0.5),
+        axis.title.y = element_text(size = 8),
+        panel.grid = element_blank(),
+        plot.margin=unit(c(0, 0, 0, 0),'cm'))
+
+
+
+
+p2 <- ggplot() +
+  scale_color_manual(values = color,breaks = names(color)) +
+  scale_shape_manual(values = shape,breaks = names(shape))+
+  geom_line(aes(
+    x = seq(0.5,2.5,0.25),
+    y = com1_str,
+    color = names(color)[1],
+  ),linetype = 'dashed') +
+  geom_point(aes(
+    x = seq(0.5,2.5,0.25),
+    y = com1_str,
+    color = names(color)[1],shape = names(shape)[1]
+  ),size = 2) +
+  
+  geom_line(aes(
+    x = seq(0.5,2.5,0.25),
+    y = com2_str,
+    color = names(color)[2]
+  ),linetype = 'dashed') +
+  geom_point(aes(
+    x = seq(0.5,2.5,0.25),
+    y = com2_str,
+    color = names(color)[2],shape = names(shape)[2]
+),size =2) +
+  
+  geom_line(aes(
+    x = seq(0.5,2.5,0.25),
+    y = com3_str,
+    color = names(color)[3],
+  ),linetype = 'dashed') +
+  geom_point(aes(
+    x = seq(0.5,2.5,0.25),
+    y = com3_str,
+    color = names(color)[3],shape = names(shape)[3]
+  ),size = 2) +
+  
+    geom_line(aes(
+    x = seq(0.5,2.5,0.25),
+    y = com4_str,
+    color = names(color)[4],
+  ),linetype = 'dashed') +
+  geom_point(aes(
+    x = seq(0.5,2.5,0.25),
+    y = com4_str,
+    color = names(color)[4],shape = names(shape)[4]
+  ),size = 2) +
+  
+  labs(x = expression(symbol(sigma)[2]),
+y = 'Standard Deviation' ,
+title = 'r = (0,0)',
+color = NULL,shape=NULL) +
+  scale_x_continuous(breaks = seq(0.5,2.5,0.25)) +
+  scale_y_continuous(breaks = seq(0.1,0.25,0.05),limits=c(0.1,0.25)) +
+  theme_bw() +
+  theme(plot.title = element_text(hjust = 0.5),
+        axis.title.y = element_text(size = 8),
+        panel.grid = element_blank(),
+        plot.margin=unit(c(0, 0, 0, 0),'cm'))
+
+
+ggarrange(p1,p2,common.legend = TRUE, legend = 'bottom')
+ggsave(filename = 'P3.pdf', path = 'D:\\xingj\\Documents\\CAR\\pic', height = 4, width = 6.5)
+
+
+sourceCpp('CAR_cpp.cpp')
+rcpp_sym_ratio(c(1,2,5),c(0.2,0.3,0.5))
+
+
+
+
+
+
+rcpp_loop(5000,500,4,2,3,1,rep(1/16,16),c(0.1,0.4,0.5),c(0.02,0.2,0.78),wo = 0.2,wm = c(0.25,0.25),ws = 0.3,real_data)
+
+rcpp_loop(5000,500,4,2,3,2,rep(1/16,16),c(0.1,0.4,0.5),c(0.02,0.2,0.78),wo = 0.2,wm = c(0.25,0.25),ws = 0.3,real_data)
+
+rcpp_loop(5000,500,4,2,3,3,rep(1/16,16),c(0.1,0.4,0.5),c(0.02,0.2,0.78),wo = 0.2,wm = c(0.25,0.25),ws = 0.3,real_data)
+
+
+
+rcpp_multinom(4,c(0.2,0.8))
 ```
